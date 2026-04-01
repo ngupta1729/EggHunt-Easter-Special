@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import posthog from 'posthog-js';
 import { pickRule, randomVisualState, calculateScore } from '@/types/eggHunt';
 import type { EggState, EggVisualState, GamePhase, GameRule, ScoreBreakdown } from '@/types/eggHunt';
 
@@ -63,6 +64,7 @@ export const useEggHuntStore = create<EggHuntStoreState>((set, get) => ({
       clueUsed: false,
       score: null,
     });
+    posthog.capture('game_started', { rule: rule.name });
   },
 
   selectEgg: (index) => {
@@ -73,16 +75,34 @@ export const useEggHuntStore = create<EggHuntStoreState>((set, get) => ({
     if (index === realEggIndex) {
       const score = calculateScore(elapsedSeconds, wrongGuesses.length, clueUsed);
       set({ phase: 'won', score });
+      posthog.capture('correct_guess', {
+        elapsed_seconds: elapsedSeconds,
+        wrong_guesses: wrongGuesses.length,
+        clue_used: clueUsed,
+        total_coins: score.total,
+      });
     } else {
       const newAttempts = attemptsRemaining - 1;
+      const lost = newAttempts === 0;
       set((state) => ({
         attemptsRemaining: newAttempts,
         wrongGuesses: [...state.wrongGuesses, index],
         eggs: state.eggs.map((egg, i) =>
           i === index ? { ...egg, isWrong: true } : egg
         ),
-        phase: newAttempts === 0 ? 'lost' : 'playing',
+        phase: lost ? 'lost' : 'playing',
       }));
+      posthog.capture('wrong_guess', {
+        attempts_remaining: newAttempts,
+        elapsed_seconds: elapsedSeconds,
+        clue_used: clueUsed,
+      });
+      if (lost) {
+        posthog.capture('game_lost', {
+          elapsed_seconds: elapsedSeconds,
+          clue_used: clueUsed,
+        });
+      }
       setTimeout(() => {
         set((state) => ({
           eggs: state.eggs.map((egg, i) =>
@@ -114,7 +134,11 @@ export const useEggHuntStore = create<EggHuntStoreState>((set, get) => ({
   useClue: () => {
     if (get().phase !== 'playing') return;
     set({ clueUsed: true });
+    posthog.capture('clue_used', { elapsed_seconds: get().elapsedSeconds });
   },
 
-  resetGame: () => set({ phase: 'idle' }),
+  resetGame: () => {
+    posthog.capture('game_reset');
+    set({ phase: 'idle' });
+  },
 }));
